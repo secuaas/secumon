@@ -1,0 +1,118 @@
+version: '3.9'
+
+services:
+  # PostgreSQL - Configuration database
+  postgres:
+    image: postgres:16-alpine
+    container_name: secumon-postgres
+    environment:
+      POSTGRES_DB: secumon
+      POSTGRES_USER: secumon
+      POSTGRES_PASSWORD: secumon_dev_pass
+    ports:
+      - "5434:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U secumon"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # TimescaleDB - Metrics time-series database
+  timescaledb:
+    image: timescale/timescaledb:latest-pg16
+    container_name: secumon-timescaledb
+    environment:
+      POSTGRES_DB: metrics
+      POSTGRES_USER: metrics_writer
+      POSTGRES_PASSWORD: metrics_dev_pass
+    ports:
+      - "5433:5432"
+    volumes:
+      - timescale_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U metrics_writer"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Redis - Cache and queue
+  redis:
+    image: redis:7-alpine
+    container_name: secumon-redis
+    command: redis-server --requirepass redis_dev_pass
+    ports:
+      - "6380:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "--raw", "incr", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # NATS - Message broker
+  nats:
+    image: nats:latest
+    container_name: secumon-nats
+    command: "--jetstream --store_dir=/data"
+    ports:
+      - "4222:4222"  # Client connections
+      - "8222:8222"  # HTTP monitoring
+    volumes:
+      - nats_data:/data
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8222/healthz"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Loki - Log aggregation
+  loki:
+    image: grafana/loki:latest
+    container_name: secumon-loki
+    ports:
+      - "3100:3100"
+    command: -config.file=/etc/loki/local-config.yaml
+    volumes:
+      - loki_data:/loki
+
+  # Grafana - Visualization (optional for dev)
+  grafana:
+    image: grafana/grafana:latest
+    container_name: secumon-grafana
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_USERS_ALLOW_SIGN_UP=false
+    ports:
+      - "3001:3000"
+    volumes:
+      - grafana_data:/var/lib/grafana
+    depends_on:
+      - postgres
+      - timescaledb
+      - loki
+
+  # Adminer - Database management UI (optional)
+  adminer:
+    image: adminer:latest
+    container_name: secumon-adminer
+    ports:
+      - "8082:8080"
+    depends_on:
+      - postgres
+      - timescaledb
+
+volumes:
+  postgres_data:
+  timescale_data:
+  redis_data:
+  nats_data:
+  loki_data:
+  grafana_data:
+
+networks:
+  default:
+    name: secumon-dev
+    driver: bridge
