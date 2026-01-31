@@ -1,0 +1,828 @@
+[KUBECTL] Utilisation de /home/ubuntu/.kube/k8s-dev.kubeconfig (env: dev)
+apiVersion: v1
+data:
+  migrations.sql: |
+    -- Enable extensions
+    CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
+    CREATE EXTENSION IF NOT EXISTS "pgcrypto";
+
+    -- Users table (for web UI authentication)
+    CREATE TABLE IF NOT EXISTS users (
+        id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+        email VARCHAR(255) UNIQUE NOT NULL,
+        password_hash VARCHAR(255) NOT NULL,
+        role VARCHAR(50) NOT NULL DEFAULT 'user', -- admin, user, readonly
+        tenant_id UUID,
+        mfa_enabled BOOLEAN DEFAULT FALSE,
+        mfa_secret VARCHAR(255),
+        created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+        last_login_at TIMESTAMP WITH TIME ZONE
+    );
+
+    CREATE INDEX idx_users_email ON users(email);
+    CREATE INDEX idx_users_tenant_id ON users(tenant_id);
+
+    -- Tenants table (for multi-tenancy)
+    CREATE TABLE IF NOT EXISTS tenants (
+        id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+        name VARCHAR(255) NOT NULL,
+        slug VARCHAR(100) UNIQUE NOT NULL,
+        plan VARCHAR(50) DEFAULT 'free', -- free, pro, enterprise
+        max_agents INTEGER DEFAULT 10,
+        created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+    );
+
+    CREATE INDEX idx_tenants_slug ON tenants(slug);
+
+    -- Agents table
+    CREATE TABLE IF NOT EXISTS agents (
+        id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+        agent_id VARCHAR(100) UNIQUE NOT NULL, -- UUID from agent
+        tenant_id UUID NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+        hostname VARCHAR(255) NOT NULL,
+        version VARCHAR(50),
+        os VARCHAR(50),
+        arch VARCHAR(50),
+        labels JSONB DEFAULT '{}',
+
+        -- Connection info
+        last_seen_at TIMESTAMP WITH TIME ZONE,
+        ip_address INET,
+        wireguard_public_key TEXT,
+        wireguard_ip INET,
+
+        -- Status
+        status VARCHAR(50) DEFAULT 'pending', -- pending, active, offline, error
+        health_status VARCHAR(50) DEFAULT 'unknown', -- healthy, degraded, unhealthy
+
+        -- Metadata
+        registered_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+        created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+    );
+
+    CREATE INDEX idx_agents_agent_id ON agents(agent_id);
+    CREATE INDEX idx_agents_tenant_id ON agents(tenant_id);
+    CREATE INDEX idx_agents_status ON agents(status);
+    CREATE INDEX idx_agents_last_seen ON agents(last_seen_at);
+
+    -- Agent tokens table (for rotating authentication tokens)
+    CREATE TABLE IF NOT EXISTS agent_tokens (
+        id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+        agent_id UUID NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
+        token_hash VARCHAR(255) NOT NULL, -- SHA256 hash of token
+        metadata JSONB DEFAULT '{}',
+        created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+        expires_at TIMESTAMP WITH TIME ZONE NOT NULL
+    );
+
+    CREATE INDEX idx_agent_tokens_agent_id ON agent_tokens(agent_id);
+    CREATE INDEX idx_agent_tokens_token_hash ON agent_tokens(token_hash);
+    CREATE INDEX idx_agent_tokens_expires_at ON agent_tokens(expires_at);
+
+    -- Alert rules table
+    CREATE TABLE IF NOT EXISTS alert_rules (
+        id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+        tenant_id UUID NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+        name VARCHAR(255) NOT NULL,
+        description TEXT,
+
+        -- Rule definition
+        metric VARCHAR(100) NOT NULL, -- cpu_usage, memory_usage, disk_usage, etc.
+        condition VARCHAR(10) NOT NULL, -- >, <, ==, !=, >=, <=
+        threshold DECIMAL(10,2) NOT NULL,
+        duration_sec INTEGER DEFAULT 60, -- Duration before triggering
+
+        -- Alert config
+        severity VARCHAR(50) DEFAULT 'warning', -- info, warning, critical
+        notify_channels TEXT[], -- email, slack, pagerduty
+
+        -- Filters
+        agent_filter JSONB DEFAULT '{}', -- Labels to filter agents
+
+        enabled BOOLEAN DEFAULT TRUE,
+        created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+    );
+
+    CREATE INDEX idx_alert_rules_tenant_id ON alert_rules(tenant_id);
+    CREATE INDEX idx_alert_rules_enabled ON alert_rules(enabled);
+    CREATE INDEX idx_alert_rules_metric ON alert_rules(metric);
+
+    -- Alerts table (fired alerts)
+    CREATE TABLE IF NOT EXISTS alerts (
+        id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+        alert_rule_id UUID REFERENCES alert_rules(id) ON DELETE SET NULL,
+        agent_id UUID REFERENCES agents(id) ON DELETE CASCADE,
+        tenant_id UUID NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+
+        -- Alert info
+        severity VARCHAR(50) NOT NULL,
+        title VARCHAR(255) NOT NULL,
+        description TEXT,
+        metric_name VARCHAR(100),
+        threshold DECIMAL(10,2),
+        current_value DECIMAL(10,2),
+
+        -- Status
+        status VARCHAR(50) DEFAULT 'firing', -- firing, resolved, acknowledged
+
+        -- Timestamps
+        fired_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+        resolved_at TIMESTAMP WITH TIME ZONE,
+        acknowledged_at TIMESTAMP WITH TIME ZONE,
+        acknowledged_by UUID REFERENCES users(id)
+    );
+
+    CREATE INDEX idx_alerts_agent_id ON alerts(agent_id);
+    CREATE INDEX idx_alerts_tenant_id ON alerts(tenant_id);
+    CREATE INDEX idx_alerts_status ON alerts(status);
+    CREATE INDEX idx_alerts_severity ON alerts(severity);
+    CREATE INDEX idx_alerts_fired_at ON alerts(fired_at DESC);
+
+    -- Dashboards table
+    CREATE TABLE IF NOT EXISTS dashboards (
+        id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+        tenant_id UUID NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+        name VARCHAR(255) NOT NULL,
+        description TEXT,
+        layout JSONB NOT NULL, -- Dashboard layout configuration
+        is_default BOOLEAN DEFAULT FALSE,
+        created_by UUID REFERENCES users(id),
+        created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+    );
+
+    CREATE INDEX idx_dashboards_tenant_id ON dashboards(tenant_id);
+
+    -- Audit log table
+    CREATE TABLE IF NOT EXISTS audit_logs (
+        id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+        tenant_id UUID REFERENCES tenants(id) ON DELETE CASCADE,
+        user_id UUID REFERENCES users(id) ON DELETE SET NULL,
+        action VARCHAR(100) NOT NULL, -- login, logout, create_agent, delete_agent, etc.
+        resource_type VARCHAR(50), -- agent, alert, user, etc.
+        resource_id UUID,
+        metadata JSONB DEFAULT '{}',
+        ip_address INET,
+        user_agent TEXT,
+        created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+    );
+
+    CREATE INDEX idx_audit_logs_tenant_id ON audit_logs(tenant_id);
+    CREATE INDEX idx_audit_logs_user_id ON audit_logs(user_id);
+    CREATE INDEX idx_audit_logs_created_at ON audit_logs(created_at DESC);
+
+    -- Row Level Security (RLS) for multi-tenancy
+    ALTER TABLE agents ENABLE ROW LEVEL SECURITY;
+    ALTER TABLE alert_rules ENABLE ROW LEVEL SECURITY;
+    ALTER TABLE alerts ENABLE ROW LEVEL SECURITY;
+    ALTER TABLE dashboards ENABLE ROW LEVEL SECURITY;
+
+    -- RLS Policies (placeholder - will be set by application context)
+    CREATE POLICY tenant_isolation_agents ON agents
+        USING (tenant_id = current_setting('app.current_tenant_id')::UUID);
+
+    CREATE POLICY tenant_isolation_alert_rules ON alert_rules
+        USING (tenant_id = current_setting('app.current_tenant_id')::UUID);
+
+    CREATE POLICY tenant_isolation_alerts ON alerts
+        USING (tenant_id = current_setting('app.current_tenant_id')::UUID);
+
+    CREATE POLICY tenant_isolation_dashboards ON dashboards
+        USING (tenant_id = current_setting('app.current_tenant_id')::UUID);
+
+    -- Functions for updated_at triggers
+    CREATE OR REPLACE FUNCTION update_updated_at_column()
+    RETURNS TRIGGER AS $$
+    BEGIN
+        NEW.updated_at = CURRENT_TIMESTAMP;
+        RETURN NEW;
+    END;
+    $$ language 'plpgsql';
+
+    -- Apply updated_at triggers
+    CREATE TRIGGER update_users_updated_at BEFORE UPDATE ON users
+        FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+
+    CREATE TRIGGER update_tenants_updated_at BEFORE UPDATE ON tenants
+        FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+
+    CREATE TRIGGER update_agents_updated_at BEFORE UPDATE ON agents
+        FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+
+    CREATE TRIGGER update_alert_rules_updated_at BEFORE UPDATE ON alert_rules
+        FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+
+    CREATE TRIGGER update_dashboards_updated_at BEFORE UPDATE ON dashboards
+        FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+    -- TimescaleDB hypertables for metrics
+    -- This migration should run on the TimescaleDB database (not PostgreSQL)
+
+    -- Create metrics table
+    CREATE TABLE IF NOT EXISTS metrics (
+        time TIMESTAMPTZ NOT NULL,
+        agent_id UUID NOT NULL,
+        tenant_id UUID NOT NULL,
+
+        -- CPU metrics
+        cpu_usage_percent DECIMAL(5,2),
+        cpu_load_avg_1 DECIMAL(10,2),
+        cpu_load_avg_5 DECIMAL(10,2),
+        cpu_load_avg_15 DECIMAL(10,2),
+        cpu_num_cores INTEGER,
+
+        -- Memory metrics
+        memory_total_bytes BIGINT,
+        memory_used_bytes BIGINT,
+        memory_available_bytes BIGINT,
+        memory_usage_percent DECIMAL(5,2),
+        swap_total_bytes BIGINT,
+        swap_used_bytes BIGINT,
+        swap_usage_percent DECIMAL(5,2),
+
+        -- Aggregate disk metrics (total across all disks)
+        disk_total_bytes BIGINT,
+        disk_used_bytes BIGINT,
+        disk_available_bytes BIGINT,
+        disk_usage_percent DECIMAL(5,2),
+
+        -- Network metrics (aggregate)
+        network_bytes_sent BIGINT,
+        network_bytes_recv BIGINT,
+        network_packets_sent BIGINT,
+        network_packets_recv BIGINT,
+        network_errors_in BIGINT,
+        network_errors_out BIGINT,
+
+        -- System info
+        uptime_seconds BIGINT,
+        num_processes INTEGER
+    );
+
+    -- Convert to hypertable (1 day chunks)
+    SELECT create_hypertable('metrics', 'time', chunk_time_interval => INTERVAL '1 day');
+
+    -- Indexes for common queries
+    CREATE INDEX idx_metrics_agent_time ON metrics (agent_id, time DESC);
+    CREATE INDEX idx_metrics_tenant_time ON metrics (tenant_id, time DESC);
+
+    -- Detailed disk metrics (per partition)
+    CREATE TABLE IF NOT EXISTS disk_metrics (
+        time TIMESTAMPTZ NOT NULL,
+        agent_id UUID NOT NULL,
+        tenant_id UUID NOT NULL,
+        device VARCHAR(100) NOT NULL,
+        mount_point VARCHAR(255) NOT NULL,
+        filesystem VARCHAR(50),
+
+        total_bytes BIGINT,
+        used_bytes BIGINT,
+        available_bytes BIGINT,
+        usage_percent DECIMAL(5,2),
+        inodes_total BIGINT,
+        inodes_used BIGINT,
+        inodes_percent DECIMAL(5,2)
+    );
+
+    SELECT create_hypertable('disk_metrics', 'time', chunk_time_interval => INTERVAL '1 day');
+    CREATE INDEX idx_disk_metrics_agent_device_time ON disk_metrics (agent_id, device, time DESC);
+
+    -- Disk I/O metrics
+    CREATE TABLE IF NOT EXISTS disk_io_metrics (
+        time TIMESTAMPTZ NOT NULL,
+        agent_id UUID NOT NULL,
+        tenant_id UUID NOT NULL,
+        device VARCHAR(100) NOT NULL,
+
+        read_bytes BIGINT,
+        write_bytes BIGINT,
+        read_count BIGINT,
+        write_count BIGINT,
+        read_time_ms BIGINT,
+        write_time_ms BIGINT,
+        io_time_ms BIGINT
+    );
+
+    SELECT create_hypertable('disk_io_metrics', 'time', chunk_time_interval => INTERVAL '1 day');
+    CREATE INDEX idx_disk_io_metrics_agent_device_time ON disk_io_metrics (agent_id, device, time DESC);
+
+    -- Network interface metrics
+    CREATE TABLE IF NOT EXISTS network_metrics (
+        time TIMESTAMPTZ NOT NULL,
+        agent_id UUID NOT NULL,
+        tenant_id UUID NOT NULL,
+        interface VARCHAR(100) NOT NULL,
+
+        bytes_sent BIGINT,
+        bytes_recv BIGINT,
+        packets_sent BIGINT,
+        packets_recv BIGINT,
+        errors_in BIGINT,
+        errors_out BIGINT,
+        drop_in BIGINT,
+        drop_out BIGINT,
+        ip_address INET,
+        is_up BOOLEAN
+    );
+
+    SELECT create_hypertable('network_metrics', 'time', chunk_time_interval => INTERVAL '1 day');
+    CREATE INDEX idx_network_metrics_agent_iface_time ON network_metrics (agent_id, interface, time DESC);
+
+    -- Process metrics (top processes)
+    CREATE TABLE IF NOT EXISTS process_metrics (
+        time TIMESTAMPTZ NOT NULL,
+        agent_id UUID NOT NULL,
+        tenant_id UUID NOT NULL,
+        pid INTEGER NOT NULL,
+
+        name VARCHAR(255),
+        user_name VARCHAR(100),
+        cpu_percent DECIMAL(5,2),
+        memory_bytes BIGINT,
+        memory_percent DECIMAL(5,2),
+        num_threads INTEGER,
+        status VARCHAR(50)
+    );
+
+    SELECT create_hypertable('process_metrics', 'time', chunk_time_interval => INTERVAL '1 day');
+    CREATE INDEX idx_process_metrics_agent_time ON process_metrics (agent_id, time DESC);
+
+    -- Retention policies (automatic data deletion)
+    -- Raw data: 30 days
+    SELECT add_retention_policy('metrics', INTERVAL '30 days');
+    SELECT add_retention_policy('disk_metrics', INTERVAL '30 days');
+    SELECT add_retention_policy('disk_io_metrics', INTERVAL '30 days');
+    SELECT add_retention_policy('network_metrics', INTERVAL '30 days');
+    SELECT add_retention_policy('process_metrics', INTERVAL '30 days');
+
+    -- Continuous aggregates for downsampling
+    -- 5-minute aggregates (kept for 90 days)
+    CREATE MATERIALIZED VIEW metrics_5min
+    WITH (timescaledb.continuous) AS
+    SELECT
+        time_bucket('5 minutes', time) AS bucket,
+        agent_id,
+        tenant_id,
+        AVG(cpu_usage_percent) AS cpu_usage_avg,
+        MAX(cpu_usage_percent) AS cpu_usage_max,
+        AVG(memory_usage_percent) AS memory_usage_avg,
+        MAX(memory_usage_percent) AS memory_usage_max,
+        AVG(disk_usage_percent) AS disk_usage_avg,
+        MAX(disk_usage_percent) AS disk_usage_max
+    FROM metrics
+    GROUP BY bucket, agent_id, tenant_id;
+
+    -- Refresh policy (refresh every 5 minutes)
+    SELECT add_continuous_aggregate_policy('metrics_5min',
+        start_offset => INTERVAL '1 hour',
+        end_offset => INTERVAL '5 minutes',
+        schedule_interval => INTERVAL '5 minutes');
+
+    -- Retention for aggregate (90 days)
+    SELECT add_retention_policy('metrics_5min', INTERVAL '90 days');
+
+    -- 1-hour aggregates (kept for 365 days)
+    CREATE MATERIALIZED VIEW metrics_1hour
+    WITH (timescaledb.continuous) AS
+    SELECT
+        time_bucket('1 hour', time) AS bucket,
+        agent_id,
+        tenant_id,
+        AVG(cpu_usage_percent) AS cpu_usage_avg,
+        MAX(cpu_usage_percent) AS cpu_usage_max,
+        AVG(memory_usage_percent) AS memory_usage_avg,
+        MAX(memory_usage_percent) AS memory_usage_max,
+        AVG(disk_usage_percent) AS disk_usage_avg,
+        MAX(disk_usage_percent) AS disk_usage_max
+    FROM metrics
+    GROUP BY bucket, agent_id, tenant_id;
+
+    SELECT add_continuous_aggregate_policy('metrics_1hour',
+        start_offset => INTERVAL '1 day',
+        end_offset => INTERVAL '1 hour',
+        schedule_interval => INTERVAL '1 hour');
+
+    SELECT add_retention_policy('metrics_1hour', INTERVAL '365 days');
+
+    -- Compression policies (compress data older than 7 days)
+    ALTER TABLE metrics SET (
+        timescaledb.compress,
+        timescaledb.compress_segmentby = 'agent_id,tenant_id'
+    );
+
+    SELECT add_compression_policy('metrics', INTERVAL '7 days');
+
+    ALTER TABLE disk_metrics SET (
+        timescaledb.compress,
+        timescaledb.compress_segmentby = 'agent_id,device'
+    );
+
+    SELECT add_compression_policy('disk_metrics', INTERVAL '7 days');
+    -- Continuous Aggregates for Downsampling
+    -- Phase 4: Advanced TimescaleDB Features
+
+    -- =====================================================
+    -- 1. Aggregate metrics par 5 minutes
+    -- =====================================================
+    CREATE MATERIALIZED VIEW IF NOT EXISTS metrics_5min
+    WITH (timescaledb.continuous) AS
+    SELECT
+        time_bucket('5 minutes', time) AS bucket,
+        agent_id,
+        metric_type,
+        metric_name,
+        AVG(value) as value_avg,
+        MAX(value) as value_max,
+        MIN(value) as value_min,
+        COUNT(*) as sample_count
+    FROM metrics
+    GROUP BY bucket, agent_id, metric_type, metric_name
+    WITH NO DATA;
+
+    -- =====================================================
+    -- 2. Aggregate metrics par 1 heure
+    -- =====================================================
+    CREATE MATERIALIZED VIEW IF NOT EXISTS metrics_1hour
+    WITH (timescaledb.continuous) AS
+    SELECT
+        time_bucket('1 hour', time) AS bucket,
+        agent_id,
+        metric_type,
+        metric_name,
+        AVG(value) as value_avg,
+        MAX(value) as value_max,
+        MIN(value) as value_min,
+        COUNT(*) as sample_count
+    FROM metrics
+    GROUP BY bucket, agent_id, metric_type, metric_name
+    WITH NO DATA;
+
+    -- =====================================================
+    -- 3. Aggregate disk metrics par 1 heure
+    -- =====================================================
+    CREATE MATERIALIZED VIEW IF NOT EXISTS disk_metrics_1hour
+    WITH (timescaledb.continuous) AS
+    SELECT
+        time_bucket('1 hour', time) AS bucket,
+        agent_id,
+        device,
+        mount_point,
+        AVG(usage_percent) as avg_usage,
+        MAX(usage_percent) as max_usage,
+        AVG(inodes_percent) as avg_inodes,
+        COUNT(*) as sample_count
+    FROM disk_metrics
+    GROUP BY bucket, agent_id, device, mount_point, filesystem
+    WITH NO DATA;
+
+    -- =====================================================
+    -- 4. Aggregate network metrics par 1 heure
+    -- =====================================================
+    CREATE MATERIALIZED VIEW IF NOT EXISTS network_metrics_1hour
+    WITH (timescaledb.continuous) AS
+    SELECT
+        time_bucket('1 hour', time) AS bucket,
+        agent_id,
+        interface,
+        SUM(bytes_sent) as total_bytes_sent,
+        SUM(bytes_recv) as total_bytes_recv,
+        SUM(packets_sent) as total_packets_sent,
+        SUM(packets_recv) as total_packets_recv,
+        SUM(errors_in) as total_errors_in,
+        SUM(errors_out) as total_errors_out,
+        COUNT(*) as sample_count
+    FROM network_metrics
+    GROUP BY bucket, agent_id, interface
+    WITH NO DATA;
+
+    -- =====================================================
+    -- 5. Refresh policies - rafraîchir les aggregates automatiquement
+    -- =====================================================
+
+    -- Rafraîchir metrics_5min toutes les 5 minutes
+    SELECT add_continuous_aggregate_policy('metrics_5min',
+        start_offset => INTERVAL '1 hour',
+        end_offset => INTERVAL '5 minutes',
+        schedule_interval => INTERVAL '5 minutes');
+
+    -- Rafraîchir metrics_1hour toutes les heures
+    SELECT add_continuous_aggregate_policy('metrics_1hour',
+        start_offset => INTERVAL '1 day',
+        end_offset => INTERVAL '1 hour',
+        schedule_interval => INTERVAL '1 hour');
+
+    -- Rafraîchir disk_metrics_1hour toutes les heures
+    SELECT add_continuous_aggregate_policy('disk_metrics_1hour',
+        start_offset => INTERVAL '1 day',
+        end_offset => INTERVAL '1 hour',
+        schedule_interval => INTERVAL '1 hour');
+
+    -- Rafraîchir network_metrics_1hour toutes les heures
+    SELECT add_continuous_aggregate_policy('network_metrics_1hour',
+        start_offset => INTERVAL '1 day',
+        end_offset => INTERVAL '1 hour',
+        schedule_interval => INTERVAL '1 hour');
+
+    -- =====================================================
+    -- 6. Index pour les aggregates
+    -- =====================================================
+
+    -- Index pour metrics_5min
+    CREATE INDEX IF NOT EXISTS idx_metrics_5min_agent_bucket
+        ON metrics_5min (agent_id, bucket DESC);
+
+    CREATE INDEX IF NOT EXISTS idx_metrics_5min_type_name
+        ON metrics_5min (metric_type, metric_name, bucket DESC);
+
+    -- Index pour metrics_1hour
+    CREATE INDEX IF NOT EXISTS idx_metrics_1hour_agent_bucket
+        ON metrics_1hour (agent_id, bucket DESC);
+
+    CREATE INDEX IF NOT EXISTS idx_metrics_1hour_type_name
+        ON metrics_1hour (metric_type, metric_name, bucket DESC);
+
+    -- Index pour disk_metrics_1hour
+    CREATE INDEX IF NOT EXISTS idx_disk_metrics_1hour_agent
+        ON disk_metrics_1hour (agent_id, bucket DESC);
+
+    -- Index pour network_metrics_1hour
+    CREATE INDEX IF NOT EXISTS idx_network_metrics_1hour_agent
+        ON network_metrics_1hour (agent_id, bucket DESC);
+    -- Retention Policies and Compression
+    -- Phase 4: Data Lifecycle Management
+
+    -- =====================================================
+    -- 1. Enable compression on hypertables
+    -- =====================================================
+
+    -- Enable compression on metrics (compress after 7 days)
+    ALTER TABLE metrics SET (
+        timescaledb.compress,
+        timescaledb.compress_segmentby = 'agent_id, metric_type, metric_name',
+        timescaledb.compress_orderby = 'time DESC'
+    );
+
+    -- Enable compression on disk_metrics
+    ALTER TABLE disk_metrics SET (
+        timescaledb.compress,
+        timescaledb.compress_segmentby = 'agent_id, device',
+        timescaledb.compress_orderby = 'time DESC'
+    );
+
+    -- Enable compression on network_metrics
+    ALTER TABLE network_metrics SET (
+        timescaledb.compress,
+        timescaledb.compress_segmentby = 'agent_id, interface',
+        timescaledb.compress_orderby = 'time DESC'
+    );
+
+    -- Enable compression on process_metrics
+    ALTER TABLE process_metrics SET (
+        timescaledb.compress,
+        timescaledb.compress_segmentby = 'agent_id, pid',
+        timescaledb.compress_orderby = 'time DESC'
+    );
+
+    -- =====================================================
+    -- 2. Compression policies - compress data older than 7 days
+    -- =====================================================
+
+    SELECT add_compression_policy('metrics', INTERVAL '7 days');
+    SELECT add_compression_policy('disk_metrics', INTERVAL '7 days');
+    SELECT add_compression_policy('network_metrics', INTERVAL '7 days');
+    SELECT add_compression_policy('process_metrics', INTERVAL '7 days');
+
+    -- =====================================================
+    -- 3. Retention policies - automatically drop old data
+    -- =====================================================
+
+    -- Raw metrics: keep 30 days
+    SELECT add_retention_policy('metrics', INTERVAL '30 days');
+    SELECT add_retention_policy('disk_metrics', INTERVAL '30 days');
+    SELECT add_retention_policy('network_metrics', INTERVAL '30 days');
+    SELECT add_retention_policy('process_metrics', INTERVAL '30 days');
+
+    -- 5-minute aggregates: keep 90 days
+    SELECT add_retention_policy('metrics_5min', INTERVAL '90 days');
+
+    -- Hourly aggregates: keep 365 days (1 year)
+    SELECT add_retention_policy('metrics_1hour', INTERVAL '365 days');
+    SELECT add_retention_policy('disk_metrics_1hour', INTERVAL '365 days');
+    SELECT add_retention_policy('network_metrics_1hour', INTERVAL '365 days');
+
+    -- =====================================================
+    -- 4. Job configuration - optimize timing
+    -- =====================================================
+
+    -- Compression jobs run at night (3 AM)
+    -- Retention jobs run at night (4 AM)
+    -- This can be configured via TimescaleDB job scheduler
+
+    COMMENT ON TABLE metrics IS 'Raw metrics - 30 days retention, compressed after 7 days';
+    COMMENT ON TABLE metrics_5min IS '5-minute aggregates - 90 days retention';
+    COMMENT ON TABLE metrics_1hour IS 'Hourly aggregates - 365 days retention';
+    -- Alerting System Tables
+    -- Phase 4: Alert Rules and Notifications
+
+    -- =====================================================
+    -- 1. Alert Rules Table
+    -- =====================================================
+    CREATE TABLE IF NOT EXISTS alert_rules (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        name TEXT NOT NULL,
+        description TEXT,
+        enabled BOOLEAN DEFAULT true,
+
+        -- Rule conditions
+        metric_type TEXT NOT NULL, -- 'cpu', 'memory', 'disk', 'network', 'process'
+        metric_name TEXT NOT NULL, -- 'usage_percent', 'load_avg_1', etc.
+        agent_id TEXT,             -- NULL = apply to all agents
+
+        -- Threshold conditions
+        condition TEXT NOT NULL,    -- 'gt' (>), 'lt' (<), 'eq' (=), 'gte' (>=), 'lte' (<=)
+        threshold DOUBLE PRECISION NOT NULL,
+        duration INTERVAL,          -- Alert only if condition persists for this duration
+
+        -- Severity
+        severity TEXT NOT NULL,     -- 'critical', 'warning', 'info'
+
+        -- Notification channels
+        notify_email BOOLEAN DEFAULT false,
+        notify_slack BOOLEAN DEFAULT false,
+        notify_webhook BOOLEAN DEFAULT false,
+
+        -- Metadata
+        created_at TIMESTAMPTZ DEFAULT NOW(),
+        updated_at TIMESTAMPTZ DEFAULT NOW(),
+        created_by UUID,
+
+        CHECK (severity IN ('critical', 'warning', 'info')),
+        CHECK (condition IN ('gt', 'lt', 'eq', 'gte', 'lte'))
+    );
+
+    CREATE INDEX idx_alert_rules_enabled ON alert_rules (enabled);
+    CREATE INDEX idx_alert_rules_metric ON alert_rules (metric_type, metric_name);
+    CREATE INDEX idx_alert_rules_agent ON alert_rules (agent_id);
+
+    -- =====================================================
+    -- 2. Alert Instances Table
+    -- =====================================================
+    CREATE TABLE IF NOT EXISTS alerts (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        rule_id UUID NOT NULL REFERENCES alert_rules(id) ON DELETE CASCADE,
+        agent_id TEXT NOT NULL,
+
+        -- Alert state
+        state TEXT NOT NULL,            -- 'firing', 'resolved'
+        severity TEXT NOT NULL,
+
+        -- Trigger information
+        metric_type TEXT NOT NULL,
+        metric_name TEXT NOT NULL,
+        current_value DOUBLE PRECISION NOT NULL,
+        threshold DOUBLE PRECISION NOT NULL,
+
+        -- Message
+        message TEXT,
+
+        -- Timestamps
+        triggered_at TIMESTAMPTZ DEFAULT NOW(),
+        resolved_at TIMESTAMPTZ,
+        last_notification_at TIMESTAMPTZ,
+
+        -- Notification tracking
+        notification_count INT DEFAULT 0,
+        notified_channels JSONB DEFAULT '[]',
+
+        CHECK (state IN ('firing', 'resolved')),
+        CHECK (severity IN ('critical', 'warning', 'info'))
+    );
+
+    -- Convert to hypertable for time-series alerts
+    SELECT create_hypertable('alerts', 'triggered_at', if_not_exists => TRUE);
+
+    CREATE INDEX idx_alerts_state ON alerts (state, triggered_at DESC);
+    CREATE INDEX idx_alerts_agent ON alerts (agent_id, triggered_at DESC);
+    CREATE INDEX idx_alerts_rule ON alerts (rule_id, triggered_at DESC);
+    CREATE INDEX idx_alerts_severity ON alerts (severity, state, triggered_at DESC);
+
+    -- =====================================================
+    -- 3. Notification Channels Table
+    -- =====================================================
+    CREATE TABLE IF NOT EXISTS notification_channels (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        name TEXT NOT NULL,
+        type TEXT NOT NULL,         -- 'email', 'slack', 'webhook', 'telegram'
+        enabled BOOLEAN DEFAULT true,
+
+        -- Configuration (JSON)
+        config JSONB NOT NULL,
+
+        -- Metadata
+        created_at TIMESTAMPTZ DEFAULT NOW(),
+        updated_at TIMESTAMPTZ DEFAULT NOW(),
+
+        CHECK (type IN ('email', 'slack', 'webhook', 'telegram', 'pagerduty'))
+    );
+
+    CREATE INDEX idx_notification_channels_type ON notification_channels (type);
+    CREATE INDEX idx_notification_channels_enabled ON notification_channels (enabled);
+
+    -- =====================================================
+    -- 4. Alert Rule Channel Mapping
+    -- =====================================================
+    CREATE TABLE IF NOT EXISTS alert_rule_channels (
+        rule_id UUID NOT NULL REFERENCES alert_rules(id) ON DELETE CASCADE,
+        channel_id UUID NOT NULL REFERENCES notification_channels(id) ON DELETE CASCADE,
+        PRIMARY KEY (rule_id, channel_id)
+    );
+
+    -- =====================================================
+    -- 5. Alert History (for reporting)
+    -- =====================================================
+    CREATE TABLE IF NOT EXISTS alert_history (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        alert_id UUID NOT NULL,
+        rule_id UUID NOT NULL,
+        agent_id TEXT NOT NULL,
+
+        event_type TEXT NOT NULL,   -- 'triggered', 'resolved', 'notified', 'acknowledged'
+        severity TEXT NOT NULL,
+
+        details JSONB,
+
+        created_at TIMESTAMPTZ DEFAULT NOW(),
+
+        CHECK (event_type IN ('triggered', 'resolved', 'notified', 'acknowledged'))
+    );
+
+    SELECT create_hypertable('alert_history', 'created_at', if_not_exists => TRUE);
+
+    CREATE INDEX idx_alert_history_alert ON alert_history (alert_id, created_at DESC);
+    CREATE INDEX idx_alert_history_agent ON alert_history (agent_id, created_at DESC);
+
+    -- =====================================================
+    -- 6. Default Alert Rules (examples)
+    -- =====================================================
+
+    -- Critical: CPU usage > 90% for 5 minutes
+    INSERT INTO alert_rules (name, description, metric_type, metric_name, condition, threshold, duration, severity)
+    VALUES (
+        'High CPU Usage',
+        'Alert when CPU usage exceeds 90% for 5 minutes',
+        'cpu',
+        'usage_percent',
+        'gt',
+        90.0,
+        '5 minutes',
+        'critical'
+    ) ON CONFLICT DO NOTHING;
+
+    -- Warning: Memory usage > 85%
+    INSERT INTO alert_rules (name, description, metric_type, metric_name, condition, threshold, severity)
+    VALUES (
+        'High Memory Usage',
+        'Alert when memory usage exceeds 85%',
+        'memory',
+        'usage_percent',
+        'gt',
+        85.0,
+        'warning'
+    ) ON CONFLICT DO NOTHING;
+
+    -- Critical: Disk usage > 90%
+    INSERT INTO alert_rules (name, description, metric_type, metric_name, condition, threshold, severity)
+    VALUES (
+        'High Disk Usage',
+        'Alert when disk usage exceeds 90%',
+        'disk',
+        'usage_percent',
+        'gt',
+        90.0,
+        'critical'
+    ) ON CONFLICT DO NOTHING;
+
+    -- Warning: Load average > 10 (for 8 cores)
+    INSERT INTO alert_rules (name, description, metric_type, metric_name, condition, threshold, duration, severity)
+    VALUES (
+        'High Load Average',
+        'Alert when 5-minute load average exceeds 10',
+        'cpu',
+        'load_avg_5',
+        'gt',
+        10.0,
+        '3 minutes',
+        'warning'
+    ) ON CONFLICT DO NOTHING;
+
+    COMMENT ON TABLE alert_rules IS 'Alert rule definitions';
+    COMMENT ON TABLE alerts IS 'Active and historical alert instances';
+    COMMENT ON TABLE notification_channels IS 'Notification channel configurations';
+    COMMENT ON TABLE alert_history IS 'Alert event history for reporting';
+kind: ConfigMap
+metadata:
+  name: secumon-migrations
+  namespace: secumon

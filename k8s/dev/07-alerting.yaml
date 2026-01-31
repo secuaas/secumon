@@ -1,0 +1,85 @@
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: secumon-alerting
+  namespace: secumon
+  labels:
+    app: secumon-alerting
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: secumon-alerting
+  template:
+    metadata:
+      labels:
+        app: secumon-alerting
+    spec:
+      imagePullSecrets:
+      - name: registry-secret
+      containers:
+      - name: alerting
+        image: qq9o8vqe.c1.bhs5.container-registry.ovh.net/secuops/secumon-alerting:latest
+        imagePullPolicy: Always
+        env:
+        - name: DB_HOST
+          valueFrom:
+            secretKeyRef:
+              name: secumon-db
+              key: DB_HOST
+        - name: DB_PORT
+          valueFrom:
+            secretKeyRef:
+              name: secumon-db
+              key: DB_PORT
+        - name: DB_USER
+          valueFrom:
+            secretKeyRef:
+              name: secumon-db
+              key: DB_USER
+        - name: DB_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: secumon-db
+              key: DB_PASSWORD
+        - name: DB_NAME
+          valueFrom:
+            secretKeyRef:
+              name: secumon-db
+              key: DB_NAME
+        - name: CHECK_INTERVAL
+          value: "60s"
+        - name: SMTP_HOST
+          value: ""
+        - name: SMTP_PORT
+          value: "587"
+        - name: SMTP_USER
+          value: ""
+        - name: SMTP_PASS
+          value: ""
+        - name: EMAIL_FROM
+          value: "alerts@secuaas.com"
+        - name: EMAIL_TO
+          value: "admin@secuaas.com"
+        resources:
+          requests:
+            memory: "128Mi"
+            cpu: "100m"
+          limits:
+            memory: "256Mi"
+            cpu: "500m"
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: secumon-alerting
+  namespace: secumon
+  labels:
+    app: secumon-alerting
+spec:
+  type: ClusterIP
+  clusterIP: None
+  selector:
+    app: secumon-alerting

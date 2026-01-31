@@ -1,0 +1,31 @@
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: secumon-migrations
+  namespace: secumon
+spec:
+  template:
+    spec:
+      restartPolicy: OnFailure
+      containers:
+      - name: migrate
+        image: postgres:16-alpine
+        command:
+        - /bin/sh
+        - -c
+        - |
+          echo "Waiting for database to be ready..."
+          until pg_isready -h timescaledb -U postgres; do
+            sleep 2
+          done
+          echo "Running migrations..."
+          PGPASSWORD=metrics_prod_pass_2026 psql -h timescaledb -U metrics_writer -d metrics -f /migrations/migrations.sql
+          echo "Migrations completed!"
+        volumeMounts:
+        - name: migrations
+          mountPath: /migrations
+      volumes:
+      - name: migrations
+        configMap:
+          name: secumon-migrations
