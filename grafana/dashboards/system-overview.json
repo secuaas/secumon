@@ -1,0 +1,201 @@
+{
+  "dashboard": {
+    "title": "SecuMon - System Overview",
+    "tags": ["secumon", "system", "overview"],
+    "timezone": "browser",
+    "schemaVersion": 38,
+    "version": 1,
+    "refresh": "30s",
+    "panels": [
+      {
+        "id": 1,
+        "type": "stat",
+        "title": "Active Agents",
+        "gridPos": {"x": 0, "y": 0, "w": 6, "h": 4},
+        "targets": [
+          {
+            "datasource": "SecuMon-TimescaleDB",
+            "rawSql": "SELECT COUNT(DISTINCT agent_id) as count FROM metrics WHERE time > NOW() - INTERVAL '5 minutes'",
+            "format": "table"
+          }
+        ],
+        "options": {
+          "graphMode": "none",
+          "colorMode": "value",
+          "justifyMode": "center",
+          "textMode": "auto"
+        },
+        "fieldConfig": {
+          "defaults": {
+            "mappings": [],
+            "thresholds": {
+              "mode": "absolute",
+              "steps": [
+                {"value": 0, "color": "red"},
+                {"value": 1, "color": "green"}
+              ]
+            }
+          }
+        }
+      },
+      {
+        "id": 2,
+        "type": "stat",
+        "title": "Metrics/Min",
+        "gridPos": {"x": 6, "y": 0, "w": 6, "h": 4},
+        "targets": [
+          {
+            "datasource": "SecuMon-TimescaleDB",
+            "rawSql": "SELECT COUNT(*) / 5.0 as rate FROM metrics WHERE time > NOW() - INTERVAL '5 minutes'",
+            "format": "table"
+          }
+        ],
+        "options": {
+          "graphMode": "area",
+          "colorMode": "value",
+          "textMode": "auto"
+        },
+        "fieldConfig": {
+          "defaults": {
+            "unit": "ops",
+            "decimals": 1
+          }
+        }
+      },
+      {
+        "id": 3,
+        "type": "timeseries",
+        "title": "CPU Usage by Agent",
+        "gridPos": {"x": 0, "y": 4, "w": 12, "h": 8},
+        "targets": [
+          {
+            "datasource": "SecuMon-TimescaleDB",
+            "rawSql": "SELECT time as \"time\", agent_id, value as \"CPU %\" FROM metrics WHERE metric_type = 'cpu' AND metric_name = 'usage_percent' AND time > NOW() - INTERVAL '1 hour' ORDER BY time",
+            "format": "time_series"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "custom": {
+              "drawStyle": "line",
+              "lineInterpolation": "smooth",
+              "fillOpacity": 10
+            },
+            "unit": "percent",
+            "min": 0,
+            "max": 100,
+            "thresholds": {
+              "mode": "absolute",
+              "steps": [
+                {"value": 0, "color": "green"},
+                {"value": 70, "color": "yellow"},
+                {"value": 90, "color": "red"}
+              ]
+            }
+          }
+        },
+        "options": {
+          "legend": {
+            "displayMode": "list",
+            "placement": "bottom"
+          }
+        }
+      },
+      {
+        "id": 4,
+        "type": "timeseries",
+        "title": "Memory Usage by Agent",
+        "gridPos": {"x": 12, "y": 4, "w": 12, "h": 8},
+        "targets": [
+          {
+            "datasource": "SecuMon-TimescaleDB",
+            "rawSql": "SELECT time as \"time\", agent_id, value as \"Memory %\" FROM metrics WHERE metric_type = 'memory' AND metric_name = 'usage_percent' AND time > NOW() - INTERVAL '1 hour' ORDER BY time",
+            "format": "time_series"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "custom": {
+              "drawStyle": "line",
+              "lineInterpolation": "smooth",
+              "fillOpacity": 10
+            },
+            "unit": "percent",
+            "min": 0,
+            "max": 100,
+            "thresholds": {
+              "mode": "absolute",
+              "steps": [
+                {"value": 0, "color": "green"},
+                {"value": 80, "color": "yellow"},
+                {"value": 95, "color": "red"}
+              ]
+            }
+          }
+        },
+        "options": {
+          "legend": {
+            "displayMode": "list",
+            "placement": "bottom"
+          }
+        }
+      },
+      {
+        "id": 5,
+        "type": "timeseries",
+        "title": "Load Average (5 min)",
+        "gridPos": {"x": 0, "y": 12, "w": 12, "h": 8},
+        "targets": [
+          {
+            "datasource": "SecuMon-TimescaleDB",
+            "rawSql": "SELECT time as \"time\", agent_id, value as \"Load Avg\" FROM metrics WHERE metric_type = 'cpu' AND metric_name = 'load_avg_5' AND time > NOW() - INTERVAL '1 hour' ORDER BY time",
+            "format": "time_series"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "custom": {
+              "drawStyle": "line",
+              "lineInterpolation": "smooth"
+            },
+            "unit": "short",
+            "min": 0
+          }
+        }
+      },
+      {
+        "id": 6,
+        "type": "gauge",
+        "title": "Latest Disk Usage",
+        "gridPos": {"x": 12, "y": 12, "w": 12, "h": 8},
+        "targets": [
+          {
+            "datasource": "SecuMon-TimescaleDB",
+            "rawSql": "SELECT mount_point || ' (' || agent_id || ')' as metric, usage_percent as value FROM disk_metrics WHERE time > NOW() - INTERVAL '5 minutes' ORDER BY time DESC LIMIT 10",
+            "format": "table"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "unit": "percent",
+            "min": 0,
+            "max": 100,
+            "thresholds": {
+              "mode": "absolute",
+              "steps": [
+                {"value": 0, "color": "green"},
+                {"value": 70, "color": "yellow"},
+                {"value": 90, "color": "red"}
+              ]
+            }
+          }
+        },
+        "options": {
+          "showThresholdLabels": true,
+          "showThresholdMarkers": true
+        }
+      }
+    ]
+  },
+  "overwrite": true
+}

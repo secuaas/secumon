@@ -1,0 +1,30 @@
+[Unit]
+Description=SecuMon Agent
+Documentation=https://github.com/secuaas/secumon
+After=network.target
+
+[Service]
+Type=simple
+User=root
+Group=root
+WorkingDirectory=/opt/secumon
+
+# Restart policy
+Restart=always
+RestartSec=10
+StartLimitInterval=200
+StartLimitBurst=5
+
+# Environment
+Environment="PATH=/usr/local/bin:/usr/bin:/bin"
+
+# Execution
+ExecStart=/usr/local/bin/secumon-agent --config /etc/secumon/agent.yaml
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=secumon-agent
+
+[Install]
+WantedBy=multi-user.target

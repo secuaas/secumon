@@ -1,0 +1,212 @@
+{
+  "dashboard": {
+    "title": "SecuMon - Alerts & Rules",
+    "tags": ["secumon", "alerts", "monitoring"],
+    "timezone": "browser",
+    "schemaVersion": 38,
+    "version": 1,
+    "refresh": "1m",
+    "panels": [
+      {
+        "id": 1,
+        "type": "stat",
+        "title": "Active Alerts (Firing)",
+        "gridPos": {"x": 0, "y": 0, "w": 6, "h": 4},
+        "targets": [
+          {
+            "datasource": "SecuMon-TimescaleDB",
+            "rawSql": "SELECT COUNT(*) as count FROM alerts WHERE status = 'firing'",
+            "format": "table"
+          }
+        ],
+        "options": {
+          "graphMode": "area",
+          "colorMode": "value",
+          "textMode": "auto"
+        },
+        "fieldConfig": {
+          "defaults": {
+            "thresholds": {
+              "mode": "absolute",
+              "steps": [
+                {"value": 0, "color": "green"},
+                {"value": 1, "color": "yellow"},
+                {"value": 10, "color": "red"}
+              ]
+            }
+          }
+        }
+      },
+      {
+        "id": 2,
+        "type": "stat",
+        "title": "Critical Alerts",
+        "gridPos": {"x": 6, "y": 0, "w": 6, "h": 4},
+        "targets": [
+          {
+            "datasource": "SecuMon-TimescaleDB",
+            "rawSql": "SELECT COUNT(*) as count FROM alerts WHERE status = 'firing' AND severity = 'critical'",
+            "format": "table"
+          }
+        ],
+        "options": {
+          "graphMode": "area",
+          "colorMode": "value"
+        },
+        "fieldConfig": {
+          "defaults": {
+            "thresholds": {
+              "mode": "absolute",
+              "steps": [
+                {"value": 0, "color": "green"},
+                {"value": 1, "color": "red"}
+              ]
+            }
+          }
+        }
+      },
+      {
+        "id": 3,
+        "type": "stat",
+        "title": "Enabled Alert Rules",
+        "gridPos": {"x": 12, "y": 0, "w": 6, "h": 4},
+        "targets": [
+          {
+            "datasource": "SecuMon-TimescaleDB",
+            "rawSql": "SELECT COUNT(*) as count FROM alert_rules WHERE enabled = true",
+            "format": "table"
+          }
+        ],
+        "options": {
+          "graphMode": "none",
+          "colorMode": "value"
+        }
+      },
+      {
+        "id": 4,
+        "type": "stat",
+        "title": "Alerts Resolved (Last 24h)",
+        "gridPos": {"x": 18, "y": 0, "w": 6, "h": 4},
+        "targets": [
+          {
+            "datasource": "SecuMon-TimescaleDB",
+            "rawSql": "SELECT COUNT(*) as count FROM alerts WHERE status = 'resolved' AND resolved_at > NOW() - INTERVAL '24 hours'",
+            "format": "table"
+          }
+        ],
+        "options": {
+          "graphMode": "area",
+          "colorMode": "value"
+        }
+      },
+      {
+        "id": 5,
+        "type": "table",
+        "title": "Active Alerts",
+        "gridPos": {"x": 0, "y": 4, "w": 24, "h": 10},
+        "targets": [
+          {
+            "datasource": "SecuMon-TimescaleDB",
+            "rawSql": "SELECT fired_at as \"Triggered\", agent_id as \"Agent\", severity as \"Severity\", title as \"Alert\", description as \"Description\", ROUND(current_value::numeric, 2) as \"Current Value\", ROUND(threshold::numeric, 2) as \"Threshold\" FROM alerts WHERE status = 'firing' ORDER BY fired_at DESC LIMIT 50",
+            "format": "table"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "custom": {
+              "align": "auto"
+            }
+          },
+          "overrides": [
+            {
+              "matcher": {"id": "byName", "options": "Severity"},
+              "properties": [
+                {
+                  "id": "custom.cellOptions",
+                  "value": {"type": "color-background"}
+                },
+                {
+                  "id": "mappings",
+                  "value": [
+                    {"type": "value", "value": "critical", "display": {"color": "red"}},
+                    {"type": "value", "value": "warning", "display": {"color": "yellow"}},
+                    {"type": "value", "value": "info", "display": {"color": "blue"}}
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      },
+      {
+        "id": 6,
+        "type": "timeseries",
+        "title": "Alert Frequency (Last 7 Days)",
+        "gridPos": {"x": 0, "y": 14, "w": 12, "h": 8},
+        "targets": [
+          {
+            "datasource": "SecuMon-TimescaleDB",
+            "rawSql": "SELECT time_bucket('1 hour', fired_at) as \"time\", severity, COUNT(*) as count FROM alerts WHERE fired_at > NOW() - INTERVAL '7 days' GROUP BY 1, 2 ORDER BY 1",
+            "format": "time_series"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "custom": {
+              "drawStyle": "bars",
+              "stacking": {"mode": "normal"}
+            },
+            "unit": "short"
+          }
+        }
+      },
+      {
+        "id": 7,
+        "type": "piechart",
+        "title": "Alerts by Severity (Last 24h)",
+        "gridPos": {"x": 12, "y": 14, "w": 6, "h": 8},
+        "targets": [
+          {
+            "datasource": "SecuMon-TimescaleDB",
+            "rawSql": "SELECT severity, COUNT(*) as count FROM alerts WHERE fired_at > NOW() - INTERVAL '24 hours' GROUP BY severity",
+            "format": "table"
+          }
+        ],
+        "options": {
+          "pieType": "donut",
+          "legend": {
+            "displayMode": "list",
+            "placement": "bottom"
+          }
+        },
+        "fieldConfig": {
+          "defaults": {
+            "mappings": [],
+            "color": {"mode": "palette-classic"}
+          }
+        }
+      },
+      {
+        "id": 8,
+        "type": "table",
+        "title": "Alert Rules Configuration",
+        "gridPos": {"x": 18, "y": 14, "w": 6, "h": 8},
+        "targets": [
+          {
+            "datasource": "SecuMon-TimescaleDB",
+            "rawSql": "SELECT name as \"Rule\", metric as \"Metric\", condition as \"Condition\", threshold as \"Threshold\", severity as \"Severity\", CASE WHEN enabled THEN '✓' ELSE '✗' END as \"Enabled\" FROM alert_rules ORDER BY severity, name",
+            "format": "table"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "custom": {
+              "align": "auto"
+            }
+          }
+        }
+      }
+    ]
+  },
+  "overwrite": true
+}

@@ -1,0 +1,181 @@
+{
+  "dashboard": {
+    "title": "SecuMon - Network & Processes",
+    "tags": ["secumon", "network", "processes"],
+    "timezone": "browser",
+    "schemaVersion": 38,
+    "version": 1,
+    "refresh": "30s",
+    "panels": [
+      {
+        "id": 1,
+        "type": "timeseries",
+        "title": "Network Traffic - Bytes Sent",
+        "gridPos": {"x": 0, "y": 0, "w": 12, "h": 8},
+        "targets": [
+          {
+            "datasource": "SecuMon-TimescaleDB",
+            "rawSql": "SELECT time_bucket('1 minute', time) as \"time\", agent_id || ' - ' || interface as metric, AVG(bytes_sent) as value FROM network_metrics WHERE time > NOW() - INTERVAL '1 hour' AND is_up = true GROUP BY 1, 2 ORDER BY 1",
+            "format": "time_series"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "custom": {
+              "drawStyle": "line",
+              "lineInterpolation": "smooth",
+              "fillOpacity": 10,
+              "stacking": {"mode": "normal"}
+            },
+            "unit": "bytes",
+            "min": 0
+          }
+        },
+        "options": {
+          "legend": {
+            "displayMode": "list",
+            "placement": "bottom",
+            "maxHeight": 150
+          }
+        }
+      },
+      {
+        "id": 2,
+        "type": "timeseries",
+        "title": "Network Traffic - Bytes Received",
+        "gridPos": {"x": 12, "y": 0, "w": 12, "h": 8},
+        "targets": [
+          {
+            "datasource": "SecuMon-TimescaleDB",
+            "rawSql": "SELECT time_bucket('1 minute', time) as \"time\", agent_id || ' - ' || interface as metric, AVG(bytes_recv) as value FROM network_metrics WHERE time > NOW() - INTERVAL '1 hour' AND is_up = true GROUP BY 1, 2 ORDER BY 1",
+            "format": "time_series"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "custom": {
+              "drawStyle": "line",
+              "lineInterpolation": "smooth",
+              "fillOpacity": 10,
+              "stacking": {"mode": "normal"}
+            },
+            "unit": "bytes",
+            "min": 0
+          }
+        }
+      },
+      {
+        "id": 3,
+        "type": "table",
+        "title": "Top Processes by CPU",
+        "gridPos": {"x": 0, "y": 8, "w": 12, "h": 10},
+        "targets": [
+          {
+            "datasource": "SecuMon-TimescaleDB",
+            "rawSql": "SELECT agent_id, name as \"Process\", ROUND(cpu_percent::numeric, 2) as \"CPU %\", ROUND((memory_bytes / 1024.0 / 1024.0)::numeric, 1) as \"Memory MB\", num_threads as \"Threads\", status as \"Status\" FROM process_metrics WHERE time > NOW() - INTERVAL '5 minutes' ORDER BY cpu_percent DESC LIMIT 20",
+            "format": "table"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "custom": {
+              "align": "auto",
+              "cellOptions": {"type": "auto"}
+            }
+          },
+          "overrides": [
+            {
+              "matcher": {"id": "byName", "options": "CPU %"},
+              "properties": [
+                {
+                  "id": "custom.cellOptions",
+                  "value": {"type": "color-background"}
+                },
+                {
+                  "id": "thresholds",
+                  "value": {
+                    "mode": "absolute",
+                    "steps": [
+                      {"value": 0, "color": "green"},
+                      {"value": 50, "color": "yellow"},
+                      {"value": 100, "color": "red"}
+                    ]
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      },
+      {
+        "id": 4,
+        "type": "table",
+        "title": "Network Interface Status",
+        "gridPos": {"x": 12, "y": 8, "w": 12, "h": 10},
+        "targets": [
+          {
+            "datasource": "SecuMon-TimescaleDB",
+            "rawSql": "SELECT DISTINCT ON (agent_id, interface) agent_id, interface, CASE WHEN is_up THEN '🟢 Up' ELSE '🔴 Down' END as \"Status\", ROUND((bytes_sent / 1024.0 / 1024.0)::numeric, 2) as \"Sent MB\", ROUND((bytes_recv / 1024.0 / 1024.0)::numeric, 2) as \"Recv MB\", errors_in + errors_out as \"Errors\" FROM network_metrics WHERE time > NOW() - INTERVAL '5 minutes' ORDER BY agent_id, interface, time DESC",
+            "format": "table"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "custom": {
+              "align": "auto"
+            }
+          }
+        }
+      },
+      {
+        "id": 5,
+        "type": "stat",
+        "title": "Total Network Errors (Last Hour)",
+        "gridPos": {"x": 0, "y": 18, "w": 6, "h": 4},
+        "targets": [
+          {
+            "datasource": "SecuMon-TimescaleDB",
+            "rawSql": "SELECT SUM(errors_in + errors_out) as total FROM network_metrics WHERE time > NOW() - INTERVAL '1 hour'",
+            "format": "table"
+          }
+        ],
+        "options": {
+          "graphMode": "none",
+          "colorMode": "value",
+          "textMode": "auto"
+        },
+        "fieldConfig": {
+          "defaults": {
+            "thresholds": {
+              "mode": "absolute",
+              "steps": [
+                {"value": 0, "color": "green"},
+                {"value": 100, "color": "yellow"},
+                {"value": 1000, "color": "red"}
+              ]
+            }
+          }
+        }
+      },
+      {
+        "id": 6,
+        "type": "stat",
+        "title": "Active Processes",
+        "gridPos": {"x": 6, "y": 18, "w": 6, "h": 4},
+        "targets": [
+          {
+            "datasource": "SecuMon-TimescaleDB",
+            "rawSql": "SELECT COUNT(DISTINCT pid) as count FROM process_metrics WHERE time > NOW() - INTERVAL '5 minutes' AND status = 'running'",
+            "format": "table"
+          }
+        ],
+        "options": {
+          "graphMode": "none",
+          "colorMode": "value",
+          "textMode": "auto"
+        }
+      }
+    ]
+  },
+  "overwrite": true
+}

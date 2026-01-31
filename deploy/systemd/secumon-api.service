@@ -1,0 +1,38 @@
+[Unit]
+Description=SecuMon API Service
+Documentation=https://github.com/secuaas/secumon
+After=network.target timescaledb.service secumon-ingestion.service
+
+[Service]
+Type=simple
+User=secumon
+Group=secumon
+WorkingDirectory=/opt/secumon
+
+# Restart policy
+Restart=always
+RestartSec=10
+StartLimitInterval=200
+StartLimitBurst=5
+
+# Environment
+Environment="PATH=/usr/local/bin:/usr/bin:/bin"
+EnvironmentFile=-/etc/secumon/api.env
+
+# Security
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/log/secumon
+
+# Execution
+ExecStart=/usr/local/bin/secumon-api
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=secumon-api
+
+[Install]
+WantedBy=multi-user.target

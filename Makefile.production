@@ -1,0 +1,125 @@
+# SecuMon - Production Makefile
+# Build and deploy SecuMon monitoring platform
+
+.PHONY: help build-all build-agent build-collector build-alerting clean install deploy-systemd test
+
+# Variables
+GO_VERSION := 1.24
+INSTALL_DIR := /usr/local/bin
+SYSTEMD_DIR := /etc/systemd/system
+CONFIG_DIR := /etc/secumon
+
+# Build flags
+BUILD_FLAGS := -ldflags="-s -w -X main.Version=$(VERSION) -X main.BuildTime=$(shell date -u +%Y-%m-%dT%H:%M:%SZ)"
+VERSION ?= 0.2.0
+
+## help: Display this help message
+help:
+	@echo "SecuMon Production Build & Deployment"
+	@echo ""
+	@echo "Usage:"
+	@echo "  make build-all          Build all services (agent, collector, alerting)"
+	@echo "  make install            Install binaries to $(INSTALL_DIR)"
+	@echo "  make deploy-systemd     Install systemd service files"
+	@echo "  make clean              Clean build artifacts"
+	@echo "  make test               Run tests"
+	@echo ""
+
+## build-all: Build all SecuMon services
+build-all: build-agent build-collector build-alerting
+	@echo "✓ All services built successfully"
+
+## build-agent: Build SecuMon agent
+build-agent:
+	@echo "Building SecuMon Agent..."
+	@cd ../secumon-agent && \
+		go mod tidy && \
+		CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build $(BUILD_FLAGS) -o bin/secumon-agent ./cmd/agent
+	@echo "✓ Agent built: ../secumon-agent/bin/secumon-agent"
+
+## build-collector: Build SecuMon collector (ingestion + API)
+build-collector:
+	@echo "Building SecuMon Collector services..."
+	@cd ../secumon-collector && \
+		go mod tidy && \
+		CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build $(BUILD_FLAGS) -o bin/secumon-ingestion ./cmd/ingestion && \
+		CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build $(BUILD_FLAGS) -o bin/secumon-api ./cmd/api && \
+		CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build $(BUILD_FLAGS) -o bin/secumon-alerting ./cmd/alerting
+	@echo "✓ Collector services built:"
+	@echo "  - ../secumon-collector/bin/secumon-ingestion"
+	@echo "  - ../secumon-collector/bin/secumon-api"
+	@echo "  - ../secumon-collector/bin/secumon-alerting"
+
+## build-alerting: Build SecuMon alerting service
+build-alerting:
+	@echo "Building SecuMon Alerting service..."
+	@cd ../secumon-collector && \
+		go mod tidy && \
+		CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build $(BUILD_FLAGS) -o bin/secumon-alerting ./cmd/alerting
+	@echo "✓ Alerting service built"
+
+## clean: Clean build artifacts
+clean:
+	@echo "Cleaning build artifacts..."
+	@rm -f ../secumon-agent/bin/*
+	@rm -f ../secumon-collector/bin/*
+	@echo "✓ Clean complete"
+
+## install: Install binaries to system
+install: build-all
+	@echo "Installing SecuMon binaries to $(INSTALL_DIR)..."
+	@sudo cp ../secumon-agent/bin/secumon-agent $(INSTALL_DIR)/
+	@sudo cp ../secumon-collector/bin/secumon-ingestion $(INSTALL_DIR)/
+	@sudo cp ../secumon-collector/bin/secumon-api $(INSTALL_DIR)/
+	@sudo cp ../secumon-collector/bin/secumon-alerting $(INSTALL_DIR)/
+	@sudo chmod +x $(INSTALL_DIR)/secumon-*
+	@echo "✓ Binaries installed"
+	@echo "  - $(INSTALL_DIR)/secumon-agent"
+	@echo "  - $(INSTALL_DIR)/secumon-ingestion"
+	@echo "  - $(INSTALL_DIR)/secumon-api"
+	@echo "  - $(INSTALL_DIR)/secumon-alerting"
+
+## deploy-systemd: Install systemd service files
+deploy-systemd:
+	@echo "Installing systemd service files..."
+	@sudo mkdir -p $(CONFIG_DIR)
+	@sudo cp deploy/systemd/*.service $(SYSTEMD_DIR)/
+	@sudo systemctl daemon-reload
+	@echo "✓ Systemd services installed"
+	@echo ""
+	@echo "Available services:"
+	@echo "  - secumon-agent.service"
+	@echo "  - secumon-ingestion.service"
+	@echo "  - secumon-api.service"
+	@echo "  - secumon-alerting.service"
+	@echo ""
+	@echo "Enable and start with:"
+	@echo "  sudo systemctl enable --now secumon-ingestion"
+	@echo "  sudo systemctl enable --now secumon-api"
+	@echo "  sudo systemctl enable --now secumon-alerting"
+
+## test: Run tests
+test:
+	@echo "Running tests..."
+	@cd ../secumon-common && go test -v ./...
+	@cd ../secumon-agent && go test -v ./...
+	@cd ../secumon-collector && go test -v ./...
+	@echo "✓ Tests complete"
+
+## docker-build: Build Docker images
+docker-build:
+	@echo "Building Docker images..."
+	@docker build -t secumon/agent:$(VERSION) -f deploy/docker/Dockerfile.agent ../secumon-agent
+	@docker build -t secumon/ingestion:$(VERSION) -f deploy/docker/Dockerfile.ingestion ../secumon-collector
+	@docker build -t secumon/api:$(VERSION) -f deploy/docker/Dockerfile.api ../secumon-collector
+	@docker build -t secumon/alerting:$(VERSION) -f deploy/docker/Dockerfile.alerting ../secumon-collector
+	@echo "✓ Docker images built"
+
+## status: Show service status
+status:
+	@echo "SecuMon Service Status:"
+	@echo ""
+	@sudo systemctl status secumon-ingestion --no-pager || echo "  ingestion: not installed"
+	@sudo systemctl status secumon-api --no-pager || echo "  api: not installed"
+	@sudo systemctl status secumon-alerting --no-pager || echo "  alerting: not installed"
+	@sudo systemctl status secumon-agent --no-pager || echo "  agent: not installed"
