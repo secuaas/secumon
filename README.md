@@ -2,30 +2,35 @@
 
 Plateforme de monitoring de sécurité et d'infrastructure pour MSP/MSSP, avec capacités de surveillance serveurs, réseau et intégration avec les outils SecuAAS.
 
-## 🎉 État Actuel - v0.2.0 (Phases 1, 2, 3 & 4+ COMPLÈTES)
+## 🎉 État Actuel - v0.3.0 (Phases 1-5 COMPLÈTES)
 
-**Pipeline complète opérationnelle avec monitoring avancé:**
+**Pipeline complète opérationnelle avec monitoring avancé temps réel:**
 ```
 Agent → gRPC → Collector → TimescaleDB → REST API → Grafana Dashboards
-                    ↓
-                Alerting Engine → Email/Slack/Webhook
+                    ↓                        ↓
+                Alerting Engine         WebSocket
+                    ↓                        ↓
+            Email/Slack/Webhook      Real-time Metrics
 ```
 
 ### ✅ Composants fonctionnels:
 - **secumon-agent** - Collecte métriques système (CPU, RAM, Disk, Network, Processes)
 - **secumon-collector** - Service d'ingestion gRPC + REST API étendue
-- **TimescaleDB** - Stockage time-series avec hypertables
-- **REST API** - 30 endpoints (métriques + alertes CRUD)
+- **TimescaleDB** - Stockage time-series optimisé (compression, aggregates, retention)
+- **REST API** - 44+ endpoints (métriques + alertes + agents CRUD)
+- **WebSocket** - Streaming temps réel des métriques
 - **Alerting Engine** - Notifications multi-canal (Email, Slack, Webhook)
 - **Grafana Dashboards** - 3 dashboards pré-configurés
 - **Production Tooling** - Systemd services + Makefile
 
 ### 📊 Statistiques:
-- **15 commits** - 3 repositories
-- **72 fichiers** - ~7200 lignes de code
+- **17 commits** - 3 repositories
+- **75 fichiers** - ~8000 lignes de code
 - **19 tests** unitaires passent
-- **4 hypertables** TimescaleDB
-- **30 endpoints** REST API opérationnels
+- **4 hypertables** + **4 continuous aggregates** TimescaleDB
+- **44+ endpoints** REST API opérationnels
+- **1 endpoint** WebSocket temps réel
+- **13 jobs** TimescaleDB (compression, retention, refresh)
 - **3 dashboards** Grafana prêts à l'emploi
 
 ### 📚 Documentation:

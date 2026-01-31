@@ -1,6 +1,6 @@
 # SecuMon - API REST Documentation
 
-Version: 0.1.0
+Version: 0.3.0
 
 ## Base URL
 
@@ -10,12 +10,47 @@ http://localhost:8080
 
 ## Authentication
 
-Currently no authentication required (TODO: JWT implementation).
+JWT authentication is optional and can be enabled via environment variable `JWT_ENABLED=true`.
 
-Future endpoints will require:
+When enabled, protected endpoints require:
 ```
 Authorization: Bearer <jwt_token>
 ```
+
+### Auth Endpoints
+
+#### Login
+**POST** `/api/v1/auth/login`
+
+**Request:**
+```json
+{
+  "username": "admin",
+  "password": "password"
+}
+```
+
+**Response:**
+```json
+{
+  "token": "eyJhbGc...",
+  "refresh_token": "eyJhbGc...",
+  "expires_in": 3600
+}
+```
+
+#### Refresh Token
+**POST** `/api/v1/auth/refresh`
+
+**Request:**
+```json
+{
+  "refresh_token": "eyJhbGc..."
+}
+```
+
+#### Logout
+**POST** `/api/v1/auth/logout`
 
 ## Response Format
 
@@ -517,9 +552,234 @@ curl -s "http://localhost:8080/api/v1/metrics/network/server-001?limit=5" | jq
 curl -s "http://localhost:8080/api/v1/metrics/process/server-001?limit=10" | jq '.metrics[] | {pid, name, cpu_percent, memory_bytes}'
 ```
 
+---
+
+## Agents Management
+
+### List Agents
+
+Get a paginated list of agents with optional filtering.
+
+**Endpoint:** `GET /api/v1/agents`
+
+**Query Parameters:**
+- `status` (optional) - Filter by status: `active`, `inactive`
+- `limit` (optional) - Results per page (default: 100)
+- `offset` (optional) - Pagination offset (default: 0)
+
+**Example:**
+```bash
+GET /api/v1/agents?status=active&limit=50&offset=0
+```
+
+**Response:**
+```json
+{
+  "agents": [
+    {
+      "id": "550e8400-e29b-41d4-a716-446655440000",
+      "name": "server-prod-01",
+      "hostname": "prod01.example.com",
+      "ip_address": "192.168.1.10",
+      "os": "Ubuntu",
+      "os_version": "22.04",
+      "agent_version": "0.3.0",
+      "status": "active",
+      "last_seen_at": "2026-01-30T23:23:29Z",
+      "last_metrics_at": "2026-01-30T23:23:29Z",
+      "created_at": "2026-01-20T10:00:00Z",
+      "updated_at": "2026-01-30T23:20:00Z"
+    }
+  ],
+  "total": 142,
+  "limit": 50,
+  "offset": 0
+}
+```
+
+### Get Agent by ID
+
+Retrieve details for a specific agent.
+
+**Endpoint:** `GET /api/v1/agents/:id`
+
+**Response:**
+```json
+{
+  "id": "550e8400-e29b-41d4-a716-446655440000",
+  "name": "server-prod-01",
+  "hostname": "prod01.example.com",
+  "ip_address": "192.168.1.10",
+  "os": "Ubuntu",
+  "os_version": "22.04",
+  "agent_version": "0.3.0",
+  "status": "active",
+  "labels": {},
+  "last_seen_at": "2026-01-30T23:23:29Z",
+  "created_at": "2026-01-20T10:00:00Z",
+  "updated_at": "2026-01-30T23:20:00Z"
+}
+```
+
+### Create Agent
+
+Register a new agent.
+
+**Endpoint:** `POST /api/v1/agents`
+
+**Request:**
+```json
+{
+  "name": "server-prod-02",
+  "hostname": "prod02.example.com",
+  "ip_address": "192.168.1.11",
+  "os": "Ubuntu",
+  "os_version": "22.04",
+  "agent_version": "0.3.0"
+}
+```
+
+**Response:** `201 Created`
+```json
+{
+  "id": "650e8400-e29b-41d4-a716-446655440001",
+  "name": "server-prod-02",
+  "status": "active",
+  ...
+}
+```
+
+### Update Agent
+
+Update agent information.
+
+**Endpoint:** `PUT /api/v1/agents/:id`
+
+**Request:**
+```json
+{
+  "name": "server-prod-02-updated",
+  "status": "inactive"
+}
+```
+
+**Response:** Updated agent object
+
+### Delete Agent
+
+Remove an agent.
+
+**Endpoint:** `DELETE /api/v1/agents/:id`
+
+**Response:** `204 No Content`
+
+### Agent Statistics
+
+Get agent statistics.
+
+**Endpoint:** `GET /api/v1/agents/stats`
+
+**Response:**
+```json
+{
+  "total": 142,
+  "active": 138,
+  "inactive": 4,
+  "online": 135,
+  "offline": 7
+}
+```
+
+---
+
+## WebSocket - Real-Time Metrics
+
+### Connect to Metrics Stream
+
+Establish a WebSocket connection to receive real-time metrics for an agent.
+
+**Endpoint:** `WS /ws/metrics/:agent_id`
+
+**Example:**
+```javascript
+const ws = new WebSocket('ws://localhost:8080/ws/metrics/server-001');
+
+ws.onmessage = (event) => {
+  const message = JSON.parse(event.data);
+  console.log('Metrics:', message);
+};
+
+ws.onerror = (error) => {
+  console.error('WebSocket error:', error);
+};
+
+ws.onclose = () => {
+  console.log('Connection closed');
+};
+```
+
+**Message Format:**
+```json
+{
+  "type": "metrics",
+  "agent_id": "server-001",
+  "timestamp": "2026-01-30T23:23:29Z",
+  "data": {
+    "cpu.usage_percent": {
+      "value": 15.2,
+      "timestamp": "2026-01-30T23:23:29Z"
+    },
+    "memory.usage_percent": {
+      "value": 45.7,
+      "timestamp": "2026-01-30T23:23:29Z"
+    },
+    "cpu.load_avg_1": {
+      "value": 1.02,
+      "timestamp": "2026-01-30T23:23:29Z"
+    }
+  }
+}
+```
+
+**Features:**
+- Metrics streamed every 2 seconds
+- Automatic reconnection support
+- Ping/Pong heartbeat (54s interval)
+- Latest metrics from past 30 seconds
+- Up to 100 metrics per message
+
+**Filter Updates** (Client → Server):
+```json
+{
+  "type": "filter",
+  "metric_types": ["cpu", "memory"],
+  "metric_names": ["usage_percent"]
+}
+```
+
+---
+
 ## Changelog
 
-### Version 0.1.0 (2024-01-30)
+### Version 0.3.0 (2026-01-31)
+- **New:** WebSocket real-time metrics streaming
+- **New:** Agents management CRUD endpoints (7 routes)
+- **New:** Agent statistics endpoint
+- **New:** JWT authentication (optional)
+- **New:** Auth endpoints (login, refresh, logout)
+- TimescaleDB continuous aggregates (4 views)
+- Compression policies (7-day threshold)
+- Retention policies (30d raw, 90d/365d aggregates)
+- API extended to 44+ handlers
+
+### Version 0.2.0 (2026-01-30)
+- Alerts API (9 endpoints)
+- Email notifications (SMTP)
+- Slack/Webhook notifications
+- Production deployment tooling
+- Grafana dashboards (3)
+
+### Version 0.1.0 (2026-01-30)
 - Initial API implementation
 - Health check endpoint
 - Agents list endpoint
