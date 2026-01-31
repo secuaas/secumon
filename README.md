@@ -2,28 +2,35 @@
 
 Plateforme de monitoring de sécurité et d'infrastructure pour MSP/MSSP, avec capacités de surveillance serveurs, réseau et intégration avec les outils SecuAAS.
 
-## 🎉 État Actuel - v0.1.0 (Phases 1, 2 & 3 COMPLÈTES)
+## 🎉 État Actuel - v0.2.0 (Phases 1, 2, 3 & 4+ COMPLÈTES)
 
-**Pipeline complète opérationnelle:**
+**Pipeline complète opérationnelle avec monitoring avancé:**
 ```
-Agent → gRPC → Collector → TimescaleDB → REST API
+Agent → gRPC → Collector → TimescaleDB → REST API → Grafana Dashboards
+                    ↓
+                Alerting Engine → Email/Slack/Webhook
 ```
 
 ### ✅ Composants fonctionnels:
 - **secumon-agent** - Collecte métriques système (CPU, RAM, Disk, Network, Processes)
-- **secumon-collector** - Service d'ingestion gRPC + REST API
+- **secumon-collector** - Service d'ingestion gRPC + REST API étendue
 - **TimescaleDB** - Stockage time-series avec hypertables
-- **REST API** - 7 endpoints pour query les métriques
+- **REST API** - 30 endpoints (métriques + alertes CRUD)
+- **Alerting Engine** - Notifications multi-canal (Email, Slack, Webhook)
+- **Grafana Dashboards** - 3 dashboards pré-configurés
+- **Production Tooling** - Systemd services + Makefile
 
 ### 📊 Statistiques:
-- **13 commits** - 3 repositories
-- **59 fichiers** - ~5866 lignes de code
+- **15 commits** - 3 repositories
+- **72 fichiers** - ~7200 lignes de code
 - **19 tests** unitaires passent
 - **4 hypertables** TimescaleDB
-- **7 endpoints** REST API opérationnels
+- **30 endpoints** REST API opérationnels
+- **3 dashboards** Grafana prêts à l'emploi
 
 ### 📚 Documentation:
-- [Deployment Guide](./DEPLOYMENT-GUIDE.md) - Installation et configuration
+- [Deployment Guide](./DEPLOYMENT-GUIDE.md) - Installation et configuration (dev)
+- [Production Deployment Guide](./PRODUCTION-DEPLOYMENT-GUIDE.md) - Déploiement production complet
 - [API Documentation](./API-DOCUMENTATION.md) - Référence API REST complète
 
 ## Vue d'ensemble
@@ -423,10 +430,15 @@ GET    /api/v1/metrics/hosts/:id/history
 GET    /api/v1/metrics/network/:id
 
 # Alertes
-GET    /api/v1/alerts
-POST   /api/v1/alerts/rules
-GET    /api/v1/alerts/history
-PUT    /api/v1/alerts/:id/acknowledge
+GET    /api/v1/alerts                      # Liste des alertes (avec filtres status/severity)
+GET    /api/v1/alerts/stats                # Statistiques des alertes
+POST   /api/v1/alerts/:id/acknowledge      # Marquer alerte comme acquittée
+GET    /api/v1/alert-rules                 # Liste des règles d'alerting
+POST   /api/v1/alert-rules                 # Créer une règle
+PUT    /api/v1/alert-rules/:id             # Modifier une règle
+DELETE /api/v1/alert-rules/:id             # Supprimer une règle
+GET    /api/v1/alert-rules/:id/test        # Tester une règle
+GET    /api/v1/alert-rules/:id/history     # Historique d'une règle
 
 # Configuration
 GET    /api/v1/config
@@ -552,6 +564,128 @@ API_TLS_CERT=/certs/tls.crt
 API_TLS_KEY=/certs/tls.key
 ```
 
+## Grafana Dashboards
+
+SecuMon inclut 3 dashboards Grafana pré-configurés avec connexion automatique à TimescaleDB:
+
+### 1. System Overview Dashboard
+- **Active Agents**: Nombre d'agents connectés
+- **Metrics Rate**: Métriques par minute ingérées
+- **CPU Usage**: Timeline de l'utilisation CPU
+- **Memory Usage**: Timeline de la mémoire
+- **Load Average**: Charge système
+- **Disk Usage**: Gauges par filesystem
+
+### 2. Network & Process Dashboard
+- **Network Traffic**: Timeline du trafic in/out
+- **Network Errors**: Erreurs et drops
+- **Network Interfaces**: Table de statut des interfaces
+- **Active Processes**: Nombre de processus actifs
+- **Top Processes**: Table des top CPU/Memory
+- **Network Connections**: Connexions actives
+
+### 3. Alerts Dashboard
+- **Alert Counters**: Total, actives, acknowledged
+- **Active Alerts**: Table des alertes en cours
+- **Alert Frequency**: Timeline des alertes
+- **Severity Distribution**: Pie chart par sévérité
+- **Alert Rules**: Table des règles configurées
+- **Alert Response Time**: Temps de réponse moyen
+
+### Installation Grafana
+
+```bash
+# Démarrer Grafana (Docker)
+docker run -d -p 3000:3000 \
+  -v ./grafana/dashboards:/etc/grafana/provisioning/dashboards \
+  -v ./grafana/datasources:/etc/grafana/provisioning/datasources \
+  --name secumon-grafana \
+  grafana/grafana:latest
+
+# Accès: http://localhost:3000
+# Login par défaut: admin / admin
+```
+
+Les datasources et dashboards sont provisionnés automatiquement au démarrage.
+
+## Production Deployment
+
+SecuMon est production-ready avec des outils de déploiement complets:
+
+### Makefile Production
+
+```bash
+# Compiler tous les binaires pour production (Linux amd64)
+make -f Makefile.production build-all
+
+# Installer les binaires dans /usr/local/bin
+sudo make -f Makefile.production install
+
+# Déployer les services systemd
+sudo make -f Makefile.production deploy-systemd
+
+# Vérifier le statut de tous les services
+sudo make -f Makefile.production status
+```
+
+### Services Systemd
+
+4 services systemd sécurisés inclus:
+- **secumon-ingestion.service**: Service d'ingestion gRPC (port 9090)
+- **secumon-api.service**: API REST (port 8080)
+- **secumon-alerting.service**: Moteur d'alerting
+- **secumon-agent.service**: Agent local (optionnel)
+
+Tous les services incluent:
+- Security hardening (NoNewPrivileges, PrivateTmp, ProtectSystem)
+- Auto-restart avec backoff
+- Logging vers journald
+- Configuration via fichiers .env
+
+### Configuration Production
+
+Copier et éditer les fichiers d'exemple:
+
+```bash
+sudo mkdir -p /etc/secumon
+sudo cp deploy/config/ingestion.env.example /etc/secumon/ingestion.env
+sudo cp deploy/config/api.env.example /etc/secumon/api.env
+sudo cp deploy/config/alerting.env.example /etc/secumon/alerting.env
+
+# Éditer avec vos valeurs de production
+sudo nano /etc/secumon/ingestion.env
+sudo nano /etc/secumon/api.env
+sudo nano /etc/secumon/alerting.env
+```
+
+### Multi-Channel Alerting
+
+Le moteur d'alerting supporte 3 canaux de notification:
+
+**1. Email (SMTP)**
+```bash
+# Dans /etc/secumon/alerting.env
+SMTP_HOST=smtp.gmail.com
+SMTP_PORT=587
+SMTP_USER=alerts@yourdomain.com
+SMTP_PASS=your_app_password
+EMAIL_FROM=alerts@yourdomain.com
+EMAIL_FROM_NAME=SecuMon Alerts
+EMAIL_TO=admin@yourdomain.com,ops@yourdomain.com
+```
+
+**2. Slack Webhook**
+```bash
+SLACK_WEBHOOK_URL=https://hooks.slack.com/services/YOUR/WEBHOOK/URL
+```
+
+**3. Generic Webhook**
+```bash
+WEBHOOK_URL=https://your-webhook-endpoint.com/alerts
+```
+
+Les emails incluent un template HTML avec styling selon la sévérité (critical=rouge, warning=orange, info=bleu).
+
 ## Roadmap et Développement
 
 ### Phase 1: Foundation (Semaines 1-6)
@@ -577,11 +711,14 @@ API_TLS_KEY=/certs/tls.key
 - [ ] Configuration UI
 
 ### Phase 4: Advanced Features (Semaines 19-24)
-- [ ] Alerting avancé avec escalade
+- [x] Alerting avancé avec notifications multi-canal (Email, Slack, Webhook)
+- [x] API complète pour alertes (CRUD sur règles et historique)
+- [x] Grafana dashboards (System Overview, Network/Process, Alerts)
+- [x] Production deployment (Systemd services, Makefile, env configs)
 - [ ] Rapports automatisés (PDF, Excel)
 - [ ] Multi-tenancy complet avec RLS
-- [ ] Intégrations SecuOps/SecuScan
-- [ ] Webhooks et API externes
+- [ ] Intégrations SecuOps/SecuScan avancées
+- [ ] Escalade automatique des alertes
 
 ### Phase 5: Production (Semaines 25-28)
 - [ ] Déploiement K8s OVH (via SecuOps)
